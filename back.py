@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -26,7 +26,7 @@ main.add_middleware(
 # ✅ Gemini API key (⚠ Do not expose in prod)
 API_KEY = "AIzaSyBzFr-G4_pZG_lxDrMDO1O3-n4WIkKHUUQ"
 
-# ✅ Global vector store (set on startup)
+# ✅ Global vector store
 vector_store = None
 
 # ✅ Load the PDF on startup and create vector index
@@ -34,14 +34,17 @@ vector_store = None
 def load_policy_pdf():
     global vector_store
 
-    # Load and extract text from PDF
-    pdf_path = "Arogya_Sanjeevani.pdf"  # You should copy the uploaded PDF here
+    pdf_path = "Arogya_Sanjeevani.pdf"
     full_text = ""
+
+    if not os.path.exists(pdf_path):
+        print(f"❌ PDF file not found: {pdf_path}")
+        return
+
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             full_text += page.extract_text() + "\n"
 
-    # Chunk and embed
     splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     chunks = splitter.split_text(full_text)
 
@@ -51,26 +54,38 @@ def load_policy_pdf():
     )
 
     vector_store = FAISS.from_texts(chunks, embedding=embeddings)
-
-# ✅ Input model
-class AskRequest(BaseModel):
-    question: str
+    print(f"✅ PDF loaded with {len(chunks)} chunks.")
 
 # ✅ Health check
 @main.get("/")
 def root():
     return {"message": "API is running"}
 
-# ✅ Ask endpoint
-@main.post("/ask")
-async def ask_question(body: AskRequest):
+# ✅ Combined GET + POST route for /ask
+@main.api_route("/ask", methods=["GET", "POST"])
+async def ask_question(request: Request):
     global vector_store
-    question = body.question
 
-    # Retrieve relevant chunks
+    if request.method == "GET":
+        return {
+            "message": "👋 Welcome to /ask endpoint. Please send a POST request with a JSON body like: { 'question': '...' }"
+        }
+
+    try:
+        body = await request.json()
+    except Exception:
+        return {"answer": "❌ Invalid JSON body."}
+
+    question = body.get("question", "").strip()
+
+    if not question:
+        return {"answer": "❌ No question provided."}
+
+    if vector_store is None:
+        return {"answer": "❌ PDF not loaded yet. Please try again later."}
+
     docs = vector_store.similarity_search(question)
 
-    # Prompt template
     prompt_template = """
     Answer the question as accurately as possible using the context below.
     If the answer is not available, respond with: "Answer not available in the context."
@@ -86,7 +101,6 @@ async def ask_question(body: AskRequest):
         template=prompt_template
     )
 
-    # Gemini Model
     model = ChatGoogleGenerativeAI(
         model="gemini-1.5-flash",
         temperature=0.3,
@@ -94,7 +108,6 @@ async def ask_question(body: AskRequest):
     )
     chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
-    # Run chain
     response = chain(
         {"input_documents": docs, "question": question},
         return_only_outputs=True
