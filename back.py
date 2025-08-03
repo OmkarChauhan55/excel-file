@@ -2,6 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import pdfplumber
+import os
+
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
@@ -11,52 +14,66 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 # ✅ FastAPI app object
 main = FastAPI()
 
-# ✅ CORS middleware setup
+# ✅ CORS
 main.add_middleware(
     CORSMiddleware,
-    allow_origins=[""],  # Replace "" with frontend domain in production
+    allow_origins=["*"],  # Replace with frontend origin in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ Gemini API key (⚠ Never expose this in public repos)
+# ✅ Gemini API key (⚠ Do not expose in prod)
 API_KEY = "AIzaSyBzFr-G4_pZG_lxDrMDO1O3-n4WIkKHUUQ"
 
-# ✅ Request schema for /ask
-class AskRequest(BaseModel):
-    question: str
-    pdf_text: str
+# ✅ Global vector store (set on startup)
+vector_store = None
 
-# ✅ Health check (optional)
-@main.get("/")
-def root():
-    return {"message": "API is running"}
+# ✅ Load the PDF on startup and create vector index
+@main.on_event("startup")
+def load_policy_pdf():
+    global vector_store
 
-# ✅ Question-answering endpoint
-@main.post("/ask")
-async def ask_question(body: AskRequest):
-    question = body.question
-    pdf_text = body.pdf_text
+    # Load and extract text from PDF
+    pdf_path = "Arogya_Sanjeevani.pdf"  # You should copy the uploaded PDF here
+    full_text = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            full_text += page.extract_text() + "\n"
 
-    # Step 1: Split text
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-    chunks = text_splitter.split_text(pdf_text)
+    # Chunk and embed
+    splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
+    chunks = splitter.split_text(full_text)
 
-    # Step 2: Embed and create FAISS store
     embeddings = GoogleGenerativeAIEmbeddings(
         model="models/embedding-001",
         google_api_key=API_KEY
     )
+
     vector_store = FAISS.from_texts(chunks, embedding=embeddings)
 
-    # Step 3: Retrieve similar documents
+# ✅ Input model
+class AskRequest(BaseModel):
+    question: str
+
+# ✅ Health check
+@main.get("/")
+def root():
+    return {"message": "API is running"}
+
+# ✅ Ask endpoint
+@main.post("/ask")
+async def ask_question(body: AskRequest):
+    global vector_store
+    question = body.question
+
+    # Retrieve relevant chunks
     docs = vector_store.similarity_search(question)
 
-    # Step 4: Prompt
+    # Prompt template
     prompt_template = """
-    Answer the question as detailed as possible from the provided context. 
-    If the answer is not in the context, say "answer is not available in the context".
+    Answer the question as accurately as possible using the context below.
+    If the answer is not available, respond with: "Answer not available in the context."
 
     Context:
     {context}
@@ -65,11 +82,11 @@ async def ask_question(body: AskRequest):
     Answer:
     """
     prompt = PromptTemplate(
-        template=prompt_template,
-        input_variables=["context", "question"]
+        input_variables=["context", "question"],
+        template=prompt_template
     )
 
-    # Step 5: Load Gemini model
+    # Gemini Model
     model = ChatGoogleGenerativeAI(
         model="gemini-1.5-flash",
         temperature=0.3,
@@ -77,11 +94,10 @@ async def ask_question(body: AskRequest):
     )
     chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
-    # Step 6: Run the chain
+    # Run chain
     response = chain(
         {"input_documents": docs, "question": question},
         return_only_outputs=True
     )
 
-    # Step 7: Return answer
     return {"answer": response["output_text"]}
