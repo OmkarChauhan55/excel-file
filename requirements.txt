@@ -14,4 +14,3 @@ sentence-transformers
 transformers
 uvicorn[standard]
 pdfplumber
-os
