@@ -10,10 +10,10 @@ from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # ✅ FastAPI app object
-app = FastAPI()
+main = FastAPI()
 
 # ✅ CORS settings
-app.add_middleware(
+main.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allow all for development
     allow_credentials=True,
