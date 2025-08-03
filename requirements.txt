@@ -13,5 +13,5 @@ wikipedia
 sentence-transformers
 transformers
 uvicorn[standard]
-pip install pdfplumber
+pdfplumber
 os
