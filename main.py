@@ -1,3 +1,5 @@
+print("✅ This is the CORRECT app.py being run")
+
 import streamlit as st
 from PyPDF2 import PdfReader
 import pandas as pd
@@ -244,3 +246,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -1,5 +1,3 @@
-print("✅ This is the CORRECT app.py being run")
-
 import streamlit as st
 from PyPDF2 import PdfReader
 import pandas as pd
@@ -60,42 +58,103 @@ def get_conversational_chain(model_name, vectorstore=None, api_key=None):
         return chain
 
 def user_input(user_question, model_name, api_key, pdf_docs, conversation_history):
-    if pdf_docs is None:
-        st.warning("Please upload PDF files before processing.")
+    if api_key is None or pdf_docs is None:
+        st.warning("Please upload PDF files and provide API key before processing.")
         return
+    text_chunks = get_text_chunks(get_pdf_text(pdf_docs), model_name)
+    vector_store = get_vector_store(text_chunks, model_name, api_key)
+    user_question_output = ""
+    response_output = ""
+    if model_name == "Google AI":
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
+        new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+        docs = new_db.similarity_search(user_question)
+        chain = get_conversational_chain("Google AI", vectorstore=new_db, api_key=api_key)
+        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+        user_question_output = user_question
+        response_output = response['output_text']
+        pdf_names = [pdf.name for pdf in pdf_docs] if pdf_docs else []
+        conversation_history.append((user_question_output, response_output, model_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), ", ".join(pdf_names)))
 
-    import requests
-    pdf_text = get_pdf_text(pdf_docs)
+        # conversation_history.append((user_question_output, response_output, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), ", ".join(pdf_names)))
 
-    try:
-        response = requests.post("http://localhost:8000/ask", json={"question": user_question, "pdf_text": pdf_text})
-        if response.status_code == 200:
-            response_output = response.json()["answer"]
-        else:
-            response_output = "Error: Backend returned status code {}".format(response.status_code)
-    except Exception as e:
-        response_output = f"Error contacting backend: {e}"
-
-    # Log conversation
-    pdf_names = [pdf.name for pdf in pdf_docs] if pdf_docs else []
-    conversation_history.append((user_question, response_output, model_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), ", ".join(pdf_names)))
-
-    # Show user message and bot response
-    st.markdown(f"""
+    # Kullanıcının sorduğu soruyu ve cevabı bir banner olarak ekleyelim
+    st.markdown(
+        f"""
+        <style>
+            .chat-message {{
+                padding: 1.5rem;
+                border-radius: 0.5rem;
+                margin-bottom: 1rem;
+                display: flex;
+            }}
+            .chat-message.user {{
+                background-color: #2b313e;
+            }}
+            .chat-message.bot {{
+                background-color: #475063;
+            }}
+            .chat-message .avatar {{
+                width: 20%;
+            }}
+            .chat-message .avatar img {{
+                max-width: 78px;
+                max-height: 78px;
+                border-radius: 50%;
+                object-fit: cover;
+            }}
+            .chat-message .message {{
+                width: 80%;
+                padding: 0 1.5rem;
+                color: #fff;
+            }}
+            .chat-message .info {{
+                font-size: 0.8rem;
+                margin-top: 0.5rem;
+                color: #ccc;
+            }}
+        </style>
         <div class="chat-message user">
             <div class="avatar">
                 <img src="https://i.ibb.co/CKpTnWr/user-icon-2048x2048-ihoxz4vq.png">
-            </div>
-            <div class="message">{user_question}</div>
+            </div>    
+            <div class="message">{user_question_output}</div>
         </div>
         <div class="chat-message bot">
             <div class="avatar">
-                <img src="https://i.ibb.co/wNmYHsx/langchain-logo.webp">
+                <img src="https://i.ibb.co/wNmYHsx/langchain-logo.webp" >
             </div>
             <div class="message">{response_output}</div>
-        </div>
-    """, unsafe_allow_html=True)
-
+            </div>
+            
+        """,
+        unsafe_allow_html=True
+    )
+            # <div class="info" style="margin-left: 20px;">Timestamp: {datetime.now()}</div>
+            # <div class="info" style="margin-left: 20px;">PDF Name: {", ".join(pdf_names)}</div>
+    if len(conversation_history) == 1:
+        conversation_history = []
+    elif len(conversation_history) > 1 :
+        last_item = conversation_history[-1]  # Son öğeyi al
+        conversation_history.remove(last_item) 
+    for question, answer, model_name, timestamp, pdf_name in reversed(conversation_history):
+        st.markdown(
+            f"""
+            <div class="chat-message user">
+                <div class="avatar">
+                    <img src="https://i.ibb.co/CKpTnWr/user-icon-2048x2048-ihoxz4vq.png">
+                </div>    
+                <div class="message">{question}</div>
+            </div>
+            <div class="chat-message bot">
+                <div class="avatar">
+                    <img src="https://i.ibb.co/wNmYHsx/langchain-logo.webp" >
+                </div>
+                <div class="message">{answer}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
                 # <div class="info" style="margin-left: 20px;">Timestamp: {timestamp}</div>
                 # <div class="info" style="margin-left: 20px;">PDF Name: {pdf_name}</div>
 
@@ -130,6 +189,15 @@ def main():
     model_name = st.sidebar.radio("Select the Model:", ( "Google AI"))
 
     api_key = None
+
+    if model_name == "Google AI":
+        api_key = st.sidebar.text_input("Enter your Google API Key:")
+        st.sidebar.markdown("Click [here](https://ai.google.dev/) to get an API key.")
+        
+        if not api_key:
+            st.sidebar.warning("Please enter your Google API Key to proceed.")
+            return
+
    
     with st.sidebar:
         st.title("Menu:")
