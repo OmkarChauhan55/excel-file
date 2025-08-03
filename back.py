@@ -28,7 +28,7 @@ API_KEY = "AIzaSyBzFr-G4_pZG_lxDrMDO1O3-n4WIkKHUUQ"
 vector_store = None
 
 # ✅ Load the PDF and prepare embeddings on startup
-@app.on_event("startup")
+@main.on_event("startup")
 def load_pdf_and_embed():
     global vector_store
 
