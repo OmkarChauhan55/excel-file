@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import pdfplumber
+import os
+
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
@@ -12,40 +14,37 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 # ✅ FastAPI app object
 main = FastAPI()
 
-# ✅ CORS settings
+# ✅ CORS
 main.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all for development
+    allow_origins=["*"],  # Replace with frontend origin in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ Gemini API key
+# ✅ Gemini API key (⚠ Do not expose in prod)
 API_KEY = "AIzaSyBzFr-G4_pZG_lxDrMDO1O3-n4WIkKHUUQ"
 
-# ✅ Global vector store
+# ✅ Global vector store (set on startup)
 vector_store = None
 
-# ✅ Load the PDF and prepare embeddings on startup
+# ✅ Load the PDF on startup and create vector index
 @main.on_event("startup")
-def load_pdf_and_embed():
+def load_policy_pdf():
     global vector_store
 
-    pdf_path = "Arogya_Sanjeevani.pdf"
+    # Load and extract text from PDF
+    pdf_path = "Arogya_Sanjeevani.pdf"  # You should copy the uploaded PDF here
     full_text = ""
-
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                full_text += text + "\n"
+            full_text += page.extract_text() + "\n"
 
-    # Split text into chunks
+    # Chunk and embed
     splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     chunks = splitter.split_text(full_text)
 
-    # Generate embeddings
     embeddings = GoogleGenerativeAIEmbeddings(
         model="models/embedding-001",
         google_api_key=API_KEY
@@ -54,49 +53,51 @@ def load_pdf_and_embed():
     vector_store = FAISS.from_texts(chunks, embedding=embeddings)
 
 # ✅ Input model
-class RunRequest(BaseModel):
-    questions: list[str]
+class AskRequest(BaseModel):
+    question: str
 
-# ✅ Prompt
-prompt_template = """
-Answer the question as accurately as possible using the context below.
-If the answer is not available, respond with: "Answer not available in the context."
+# ✅ Health check
+@main.get("/")
+def root():
+    return {"message": "API is running"}
 
-Context:
-{context}
+# ✅ Ask endpoint
+@main.post("/ask")
+async def ask_question(body: AskRequest):
+    global vector_store
+    question = body.question
 
-Question: {question}
-Answer:
-"""
-prompt = PromptTemplate(
-    input_variables=["context", "question"],
-    template=prompt_template
-)
+    # Retrieve relevant chunks
+    docs = vector_store.similarity_search(question)
 
-# ✅ QA Chain
-def get_qa_chain():
+    # Prompt template
+    prompt_template = """
+    Answer the question as accurately as possible using the context below.
+    If the answer is not available, respond with: "Answer not available in the context."
+
+    Context:
+    {context}
+
+    Question: {question}
+    Answer:
+    """
+    prompt = PromptTemplate(
+        input_variables=["context", "question"],
+        template=prompt_template
+    )
+
+    # Gemini Model
     model = ChatGoogleGenerativeAI(
         model="gemini-1.5-flash",
         temperature=0.3,
         google_api_key=API_KEY
     )
-    return load_qa_chain(model, chain_type="stuff", prompt=prompt)
+    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
-# ✅ Health check
-@app.get("/")
-def health():
-    return {"status": "running"}
+    # Run chain
+    response = chain(
+        {"input_documents": docs, "question": question},
+        return_only_outputs=True
+    )
 
-# ✅ Final webhook for HackRx
-@app.post("/api/v1/hackrx/run")
-async def hackrx_run(body: RunRequest):
-    global vector_store
-    chain = get_qa_chain()
-
-    answers = []
-    for question in body.questions:
-        docs = vector_store.similarity_search(question)
-        response = chain({"input_documents": docs, "question": question}, return_only_outputs=True)
-        answers.append(response["output_text"])
-
-    return {"answers": answers}
+    return {"answer": response["output_text"]}
