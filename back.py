@@ -68,7 +68,7 @@ def load_pdf_from_url(pdf_url: str) -> str:
     return full_text
 
 # 🧠 Q&A endpoint
-@main.post("/hackrx/run", tags=["HackRx"])
+@main.post("/api/v1/hackrx/run", tags=["HackRx"])
 async def run_hackrx(body: AskRequest, _: bool = Depends(verify_token)):
     # 📖 Extract text from PDF
     full_text = load_pdf_from_url(body.documents)
